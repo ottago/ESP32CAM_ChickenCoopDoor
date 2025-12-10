@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      .container {
+        overflow:auto;
+        border-style:solid;
+      }
+      .row {
+        display:block;
+      }
+      .sidebyside {
+        display:inline;
+        margin:2em;
+      }
+      .right {
+        float:right;
+      }
+    </style>
+
+
+    <script type="text/javascript">
+      var getJSON = function(url, callback) {
+        var request = new XMLHttpRequest();
+        request.timeout = 1000;
+        request.open('GET', url, true);
+        request.responseType = 'json';
+        request.onload = function() {
+          var status = request.status;
+          if (status === 200) {
+            callback(null, request.response);
+          } else {
+            callback(status, request.response);
+          }
+        };
+        request.ontimeout = (e) => {
+          document.getElementById('status').style.visibility= 'hidden';
+        };
+
+        request.send();
+      };
+
+      function onTimerElapsed() {
+        getJSON('/doorStatus', function(err, response) {
+          if (err !== null) {
+            document.getElementById('status_msg').innerText = "Error: " . err;
+            document.getElementById('status_runtime').innerText = response;
+          } else {
+            document.getElementById('status').style.visibility= 'visible';
+            document.getElementById('status_msg').innerText = response.status;
+            document.getElementById('status_runtime').innerText = response.runtime == 0 ? "" : response.runtime / 1000;
+            document.getElementById('status_hall').innerText = response.hall;
+            document.getElementById('status_nextCycle').innerText = response.nextCycle;
+            document.getElementById('status_parseError').innerText = response.parseError;
+          }
+        });
+      }
+
+    </script>
+  </head>
+<body onload="setInterval(onTimerElapsed, 1000);">
+<div class="w3-container w3-green">
+  <h1>Chicken Coop Door Control</h1>
+</div>
+<div class="right"><a href="/camera">Camera</a></div>
+<div class="w3-row-padding">
+  <div class="buttons-container">
+    <button type="button" id="open-button" *ngIf="displayStartButton">Open</button>
+    <button type="button" id="close-button" *ngIf="!displayStartButton">Close</button>
+    <button type="button" id="stop-button">STOP</button>
+  </div>
+  <div id="status" class="container">
+    <div class="row">Status: <div class="sidebyside" id="status_msg">Please wait...</div></div>
+    <div class="row">Runtime: <div class="sidebyside" id="status_runtime"></div></div>
+    <div class="row">Hall: <div class="sidebyside" id="status_hall"></div></div>
+    <div class="row">Next Cycle: <div class="sidebyside" id="status_nextCycle"></div></div>
+    <div class="row">Parse Error: <div class="sidebyside" id="status_parseError"></div></div>
+  </div>
+</div>
+</hl>
+
+<script>
+document.getElementById('stop-button').addEventListener('click', async _ => {
+  try {
+    const response = await fetch('/doorStop', { method: 'get' });
+    console.log('doorStop', response);
+  } catch(err) {
+    console.error(`Error doorStop: ${err}`);
+  }
+});
+
+document.getElementById('open-button').addEventListener('click', async _ => {
+  try {     
+    const response = await fetch('/doorOpen', { method: 'get' });
+    console.log('doorOpen', response);
+  } catch(err) {
+    console.error(`Error doorOpen: ${err}`);
+  }
+});
+
+document.getElementById('close-button').addEventListener('click', async _ => {
+  try {     
+    const response = await fetch('/doorClose', { method: 'get' });
+    console.log('doorClose', response);
+  } catch(err) {
+    console.error(`Error doorClose: ${err}`);
+  }
+});
+</script>
+</body>
+</html>
+

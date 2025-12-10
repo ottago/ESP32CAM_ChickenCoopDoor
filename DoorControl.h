@@ -1,0 +1,260 @@
+#ifndef __DOORCONTROL_H__
+#define __DOORCONTROL_H__
+
+#ifdef __cplusplus
+
+#include <ESP_NtpTime.h>
+#include <ArduinoJson.h>
+#include <StreamUtils.h>
+//#include <WiFi.h>
+#include <Telemetry.h>
+
+#define MOTOR_A 12
+#define MOTOR_B 13
+
+#define FILENAME "/openTime.json"
+
+class DoorControl {
+
+private:
+  ESP_NtpTime *_ntpTime;
+
+  unsigned long _nextCycleTime = 0;    // The time of the next cycle time. (milliseconds)
+  unsigned long _autoCloseTime = 0;    // The time to close after the initial cycle started. (milliseconds)
+  unsigned long _returnDelayMs = 0;    // Delay in ms before auto retracting. (milliseconds)
+  unsigned long _motorMaxRunTime = 0;  // The maximum time the motor should run before stopping. (milliseconds)
+  unsigned long _motorStartTime = 0;   // Time the motor started, used to calculate how long its running. (milliseconds)
+
+  // Allocate the JSON document
+  //
+  // {  "Status": "Waiting before close...",
+  //    "runtime": 500,
+  //    "hall": 67,
+  //    "nextCycle": 61261,
+  //   "parseError": "h: 4\tm: 10\tNow: 13:28 Next time: 30:30 Minutes: 1022"
+  //  }
+  JsonDocument _json;
+  String _parseErrorStr = "";  // Last error reported when parsing time file.
+
+  String _statusStr = "";
+
+
+  //
+  // Return the numner of minutes for the given hours and minutes.
+  //
+  uint16_t timeInMinutes(uint8_t hour, uint8_t minute) {
+    return (hour * 60) + minute;
+  }
+
+  //
+  // Return the time of day in minutes since midnight.
+  //
+  uint16_t timeInMinutes() {
+    struct tm *timeParts = _ntpTime->getTimeParts();
+
+    return timeInMinutes(timeParts->tm_hour, timeParts->tm_min);
+  }
+
+  void sendAction(const char *action) {
+    Telemetry::instance()
+      ->appendMacAddress()
+      ->appendHostname()
+      ->append("action", action)
+      ->send();
+  }
+
+
+public:
+  DoorControl(ESP_NtpTime *time)
+    : _ntpTime(time){};
+
+  void begin() {
+    pinMode(MOTOR_A, OUTPUT);
+    pinMode(MOTOR_B, OUTPUT);
+
+    stop();
+    calculateNextCycleTime();
+  };
+
+
+  void open() {
+    digitalWrite(MOTOR_A, LOW);
+    digitalWrite(MOTOR_B, HIGH);
+
+    if (_motorStartTime == 0) {
+      _motorStartTime = millis();
+    }
+
+    _statusStr = "Opening";
+    Serial.printf(PSTR("Door Open\r\n"));
+
+    sendAction(_statusStr.c_str());
+  };
+
+  void close() {
+    digitalWrite(MOTOR_A, HIGH);
+    digitalWrite(MOTOR_B, LOW);
+
+    if (_motorStartTime == 0) {
+      _motorStartTime = millis();
+    }
+
+    _statusStr = "Closing";
+    Serial.printf(PSTR("Door Close\r\n"));
+
+    sendAction(_statusStr.c_str());
+  };
+
+  void stop(bool force = true) {
+    digitalWrite(MOTOR_A, LOW);
+    digitalWrite(MOTOR_B, LOW);
+
+    _motorStartTime = 0;
+
+    // Stop any currently in progress events.
+    if (force) {
+      _nextCycleTime = 0;
+      _autoCloseTime = 0;
+    }
+
+    _statusStr = "Stopped";
+    Serial.printf(PSTR("Door Stop\r\n"));
+
+    sendAction(_statusStr.c_str());
+  };
+
+  unsigned long runtime() {
+    if (_motorStartTime == 0) {
+      return 0;
+    }
+
+    return millis() - _motorStartTime;
+  };
+
+  String statusJson() {
+    // Make sure we have up to date values.
+    calculateNextCycleTime();
+
+    _json["status"] = _statusStr;
+    _json["runtime"] = runtime();
+    //_json["hall"] = hallRead();
+    //_json["now"] = _ntpTime->localTimeMs();
+    // Show either seconds to next cycle, or seconds to auto close.
+    _json["nextCycle"] = (_nextCycleTime == 0 ? _autoCloseTime - millis() : _nextCycleTime - millis()) / 1000;
+    _json["parseError"] = _parseErrorStr;
+
+    String encoded;
+    serializeJson(_json, encoded);
+
+    return encoded;
+
+    // Seriallising directly to a stream sends 1 byte at a time,
+    // this buffers vastly improving performance.
+    //WriteBufferingStream buffer{ Serial, 64 };
+    //serializeJson(_json, buffer);
+    //buffer.flush();
+  }
+
+
+  void calculateNextCycleTime() {
+    _nextCycleTime = 0;
+
+    if (!_ntpTime->hasSync()) {
+      Serial.println("Skipping door open, no NTP sync!");
+      _parseErrorStr = "No NTP sync!";
+      return;
+    }
+
+    if (!LittleFS.exists(FILENAME)) {
+      _parseErrorStr = "File not found: " FILENAME;
+      return;
+    }
+
+    File file = LittleFS.open(FILENAME, "r");
+    if (!file) {
+      _parseErrorStr = "Unable to open file: \"" FILENAME "\"";
+      Serial.println(_parseErrorStr);
+      return;
+    }
+
+    DeserializationError error = deserializeJson(_json, file);
+    if (error != DeserializationError::Ok) {
+      _parseErrorStr = String("Unable to deserialise \"" FILENAME "\": ") + error.c_str();
+      Serial.println(_parseErrorStr);
+      return;
+    }
+
+    if (_json.isNull()) {
+      _parseErrorStr = "Empty file: \"" FILENAME "\"";
+      return;
+    }
+
+    int16_t h = _json["h"];
+    int16_t m = _json["m"];
+    _returnDelayMs = _json["delay"];
+    _motorMaxRunTime = _json["runtime"];
+
+    uint16_t nextTime = timeInMinutes(h, m);
+    uint16_t nowMins = timeInMinutes();
+    if (nextTime < nowMins) {
+      // If its already passed, move to tomorrow.
+      nextTime += 24 * 60;
+    }
+
+
+    // Calculate next time relative to millis.
+    struct tm *timeParts = _ntpTime->getTimeParts();
+    _nextCycleTime = millis() + ((((nextTime - nowMins) * 60) - timeParts->tm_sec) * 1000);
+
+    // To avoid loops, if we're already running ignore.
+    if (runtime() > 0 || _autoCloseTime > 0) {
+      _parseErrorStr = "Running cycle... nextCycle=" + String(_nextCycleTime) + "  now=" + millis();
+      _nextCycleTime = 0;
+
+      return;
+    }
+
+    char buf[80];
+    snprintf_P(buf, sizeof(buf), PSTR("Now: %02d:%02d\tNext time: %02d:%02d\tMinutes: %d"),
+               nowMins / 60, nowMins % 60, nextTime / 60, nextTime % 60, nextTime - nowMins);
+    _parseErrorStr = buf;  // Success
+  }
+
+
+  void handle() {
+    // Make sure the motor doesn't run too long.
+    if (_motorMaxRunTime != 0 && runtime() >= _motorMaxRunTime) {
+      Serial.printf(PSTR("Motor running too long %lu/%lu... "), runtime(), _motorMaxRunTime);
+      stop(false);
+
+      calculateNextCycleTime();
+    }
+
+    unsigned long millisNow = millis();
+    if (_nextCycleTime != 0 && millisNow >= _nextCycleTime) {
+      Serial.printf(PSTR("OPEN  millis=%lu nextCycleTime=%lu autoCloseTime=%lu\r\n"), millisNow, _nextCycleTime, _autoCloseTime);
+      _autoCloseTime = _nextCycleTime + _returnDelayMs;
+      _nextCycleTime = 0;   // Stop triggering this event.
+      _motorStartTime = 0;  // Reset run time since its only reset on stop.
+      open();
+      _statusStr = "Cycle: Opening";
+      sendAction(_statusStr.c_str());
+      delay(1);  // Ensure that when we come round again, runtime is not 0.
+    } else if (runtime() == 0 && _autoCloseTime != 0 && millisNow < _autoCloseTime) {
+      Serial.printf(PSTR("WAIT  millis=%lu nextCycleTime=%lu autoCloseTime=%lu\r\n"), millisNow, _nextCycleTime, _autoCloseTime);
+      _statusStr = "Cycle: Waiting before close...";
+      sendAction(_statusStr.c_str());
+      delay(250);  // Since this will trigger again and again while in the state, delay a bit as not to spam the logs.
+    } else if (_autoCloseTime != 0 && millisNow >= _autoCloseTime) {
+      Serial.printf(PSTR("CLOSE millis=%lu nextCycleTime=%lu autoCloseTime=%lu\r\n"), millisNow, _nextCycleTime, _autoCloseTime);
+      _autoCloseTime = 0;   // Stop triggering this event.
+      _motorStartTime = 0;  // Reset run time since its only reset on stop.
+      close();
+      _statusStr = "Cycle: Closing";
+      sendAction(_statusStr.c_str());
+    }
+  }
+};
+
+#endif  // __cplusplus
+#endif  // __DOORCONTROL_H__
