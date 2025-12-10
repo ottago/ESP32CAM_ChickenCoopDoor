@@ -1122,21 +1122,25 @@ static esp_err_t win_handler(httpd_req_t *req) {
 }
 
 static esp_err_t index_handler(httpd_req_t *req) {
-  httpd_resp_set_type(req, "text/html");
-  httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
   sensor_t *s = esp_camera_sensor_get();
+  const char *redirect_url;
+  
   if (s != NULL) {
     if (s->id.PID == OV3660_PID) {
-      return httpd_resp_send(req, (const char *)index_ov3660_html_gz, index_ov3660_html_gz_len);
+      redirect_url = "/index_ov3660.html";
     } else if (s->id.PID == OV5640_PID) {
-      return httpd_resp_send(req, (const char *)index_ov5640_html_gz, index_ov5640_html_gz_len);
+      redirect_url = "/index_ov5640.html";
     } else {
-      return httpd_resp_send(req, (const char *)index_ov2640_html_gz, index_ov2640_html_gz_len);
+      redirect_url = "/index_ov2640.html";
     }
   } else {
     log_e("Camera sensor not found");
     return httpd_resp_send_500(req);
   }
+  
+  httpd_resp_set_status(req, "302 Found");
+  httpd_resp_set_hdr(req, "Location", redirect_url);
+  return httpd_resp_send(req, NULL, 0);
 }
 
 void startCameraServer() {
