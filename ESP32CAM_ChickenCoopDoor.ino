@@ -48,6 +48,10 @@
 
 #if ENABLE_CAMERA
 #define CAMERA_MODEL_AI_THINKER  // Has PSRAM
+// Disable face detection to save flash space
+#define CONFIG_ESP_FACE_DETECT_ENABLED 0
+// Disable LED flash to save additional flash space
+#define CONFIG_LED_ILLUMINATOR_ENABLED 0
 #include "esp_camera.h"
 #include "camera_pins.h"
 #include "camera_helper.h"
@@ -55,7 +59,6 @@
 
 #include <ESP_NtpTime.h>
 #include <ESP_Wifi_Helper.h>
-#include <WiFiManager.h>  // https://github.com/tzapu/WiFiManager
 #include <WiFiMultiCredentials.h>
 #include <Telemetry.h>
 
